@@ -1,0 +1,7 @@
+project_id = "jffjiwhqvxephrsvtgun"
+
+[functions.honeypot-chat]
+verify_jwt = false
+
+[functions.analyze-intelligence]
+verify_jwt = false
