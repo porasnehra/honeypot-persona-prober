@@ -7,13 +7,11 @@ import {
   ShieldCheck,
   Banknote,
   Phone,
-  Mail,
   Link,
   Wallet,
-  User,
-  Building,
   Loader2,
   CheckCircle2,
+  Key,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -53,12 +51,9 @@ export function IntelligencePanel({ intelligence, isAnalyzing }: IntelligencePan
     ? [
         { icon: Banknote, label: 'Bank Accounts', data: intelligence.extractedData.bankAccounts },
         { icon: Wallet, label: 'UPI IDs', data: intelligence.extractedData.upiIds },
+        { icon: Link, label: 'Phishing Links', data: intelligence.extractedData.phishingLinks },
         { icon: Phone, label: 'Phone Numbers', data: intelligence.extractedData.phoneNumbers },
-        { icon: Mail, label: 'Emails', data: intelligence.extractedData.emails },
-        { icon: Link, label: 'URLs', data: intelligence.extractedData.urls },
-        { icon: Wallet, label: 'Crypto Wallets', data: intelligence.extractedData.cryptoWallets },
-        { icon: User, label: 'Names', data: intelligence.extractedData.names },
-        { icon: Building, label: 'Organizations', data: intelligence.extractedData.organizations },
+        { icon: Key, label: 'Suspicious Keywords', data: intelligence.extractedData.suspiciousKeywords },
       ]
     : [];
 

@@ -33,9 +33,25 @@ CRITICAL RULES:
 - NEVER be overly eager or suspicious
 - Just be a believable, slightly confused elderly person`;
 
-interface Message {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
+interface ConversationMessage {
+  sender: 'scammer' | 'user';
+  text: string;
+  timestamp: string;
+}
+
+interface HoneypotRequest {
+  sessionId: string;
+  message: {
+    sender: 'scammer';
+    text: string;
+    timestamp: string;
+  };
+  conversationHistory: ConversationMessage[];
+  metadata: {
+    channel: string;
+    language: string;
+    locale: string;
+  };
 }
 
 serve(async (req) => {
@@ -44,14 +60,35 @@ serve(async (req) => {
   }
 
   try {
-    const { messages } = await req.json();
+    const body: HoneypotRequest = await req.json();
+    const { sessionId, message, conversationHistory, metadata } = body;
+    
+    console.log(`[${sessionId}] New message from ${message.sender}: "${message.text}"`);
+    console.log(`[${sessionId}] Channel: ${metadata.channel}, Language: ${metadata.language}`);
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
       throw new Error('LOVABLE_API_KEY is not configured');
     }
 
-    const fullMessages: Message[] = [
+    // Convert conversation history to AI message format
+    const messages = [];
+    
+    // Add conversation history
+    for (const msg of conversationHistory) {
+      messages.push({
+        role: msg.sender === 'scammer' ? 'user' : 'assistant',
+        content: msg.text,
+      });
+    }
+    
+    // Add current message
+    messages.push({
+      role: 'user',
+      content: message.text,
+    });
+
+    const fullMessages = [
       { role: 'system', content: HONEYPOT_SYSTEM_PROMPT },
       ...messages,
     ];
@@ -65,19 +102,19 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'google/gemini-3-flash-preview',
         messages: fullMessages,
-        stream: true,
+        stream: false, // Non-streaming for clean JSON response
       }),
     });
 
     if (!response.ok) {
       if (response.status === 429) {
-        return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }), {
+        return new Response(JSON.stringify({ status: 'error', reply: 'Rate limit exceeded. Please try again later.' }), {
           status: 429,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       if (response.status === 402) {
-        return new Response(JSON.stringify({ error: 'Payment required. Please add credits.' }), {
+        return new Response(JSON.stringify({ status: 'error', reply: 'Payment required. Please add credits.' }), {
           status: 402,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
@@ -87,13 +124,24 @@ serve(async (req) => {
       throw new Error(`AI Gateway error: ${response.status}`);
     }
 
-    return new Response(response.body, {
-      headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
+    const data = await response.json();
+    const replyText = data.choices?.[0]?.message?.content || 'I apologize, but I could not process that request.';
+    
+    console.log(`[${sessionId}] Agent reply: "${replyText}"`);
+
+    // Return in GUVI-specified format
+    const result = {
+      status: 'success',
+      reply: replyText,
+    };
+
+    return new Response(JSON.stringify(result), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
     console.error('Honeypot chat error:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ status: 'error', reply: error instanceof Error ? error.message : 'Unknown error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
