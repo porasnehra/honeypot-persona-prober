@@ -5,36 +5,43 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-const ANALYSIS_PROMPT = `You are an intelligence extraction system. Analyze the conversation below and extract any scam-related intelligence.
+const ANALYSIS_PROMPT = `You are an intelligence extraction system. Analyze the conversation and extract ONLY explicitly mentioned data.
 
-Return a JSON object with the following structure:
+CRITICAL RULES:
+- ONLY extract data that is EXPLICITLY written in the conversation
+- NEVER guess, predict, or fabricate any values
+- If no data is found for a field, return an empty array []
+- Be conservative - when in doubt, don't include it
+
+Return a JSON object:
 {
   "isScam": boolean,
-  "scamType": string or null (e.g., "lottery", "romance", "tech_support", "phishing", "advance_fee", "investment"),
+  "scamType": string or null,
   "threatLevel": "low" | "medium" | "high" | "critical",
   "confidence": number (0-100),
   "extractedData": {
-    "bankAccounts": string[],
-    "upiIds": string[],
-    "phoneNumbers": string[],
-    "emails": string[],
-    "urls": string[],
-    "cryptoWallets": string[],
-    "names": string[],
-    "organizations": string[]
+    "bankAccounts": [],
+    "upiIds": [],
+    "phoneNumbers": [],
+    "emails": [],
+    "urls": [],
+    "cryptoWallets": [],
+    "names": [],
+    "organizations": []
   },
-  "indicators": string[],
+  "indicators": [],
   "summary": string
 }
 
-Be thorough in extracting any financial identifiers, contact information, or suspicious URLs. Look for patterns like:
-- Bank account numbers (various formats)
-- UPI IDs (format: name@provider)
-- Phone numbers (with or without country codes)
-- Email addresses
-- Suspicious URLs or domains
-- Cryptocurrency wallet addresses
-- Names of individuals or fake organizations`;
+EXTRACTION PATTERNS (only if explicitly present):
+- Bank accounts: actual account numbers written out
+- UPI IDs: format name@provider (e.g., john@upi)
+- Phone numbers: actual digits provided
+- Emails: actual email addresses
+- URLs: actual links/domains
+- Crypto wallets: actual wallet addresses
+
+If the conversation is casual/normal with no scam indicators, set isScam to false and threatLevel to "low".`;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
