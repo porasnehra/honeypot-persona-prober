@@ -22,26 +22,34 @@ Return a JSON object:
   "extractedData": {
     "bankAccounts": [],
     "upiIds": [],
+    "phishingLinks": [],
     "phoneNumbers": [],
-    "emails": [],
-    "urls": [],
-    "cryptoWallets": [],
-    "names": [],
-    "organizations": []
+    "suspiciousKeywords": []
   },
   "indicators": [],
-  "summary": string
+  "summary": string,
+  "agentNotes": string (brief notes about scammer tactics observed)
 }
 
 EXTRACTION PATTERNS (only if explicitly present):
-- Bank accounts: actual account numbers written out
+- Bank accounts: actual account numbers written out (format as XXXX-XXXX-XXXX)
 - UPI IDs: format name@provider (e.g., john@upi)
-- Phone numbers: actual digits provided
-- Emails: actual email addresses
-- URLs: actual links/domains
-- Crypto wallets: actual wallet addresses
+- Phishing links: actual links/domains/URLs
+- Phone numbers: actual digits provided (format as +91XXXXXXXXXX)
+- Suspicious keywords: words like "urgent", "verify now", "account blocked", "prize", "lottery", "OTP"
 
 If the conversation is casual/normal with no scam indicators, set isScam to false and threatLevel to "low".`;
+
+interface ConversationMessage {
+  sender: 'scammer' | 'user';
+  text: string;
+  timestamp: string;
+}
+
+interface AnalysisRequest {
+  sessionId: string;
+  conversationHistory: ConversationMessage[];
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -49,15 +57,17 @@ serve(async (req) => {
   }
 
   try {
-    const { conversation } = await req.json();
+    const { sessionId, conversationHistory }: AnalysisRequest = await req.json();
+    
+    console.log(`[${sessionId}] Analyzing ${conversationHistory.length} messages`);
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
       throw new Error('LOVABLE_API_KEY is not configured');
     }
 
-    const conversationText = conversation
-      .map((msg: { role: string; content: string }) => `${msg.role}: ${msg.content}`)
+    const conversationText = conversationHistory
+      .map((msg) => `${msg.sender}: ${msg.text}`)
       .join('\n\n');
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -89,7 +99,6 @@ serve(async (req) => {
     try {
       analysis = JSON.parse(analysisText);
     } catch {
-      // If JSON parsing fails, return a default structure
       analysis = {
         isScam: false,
         scamType: null,
@@ -98,17 +107,28 @@ serve(async (req) => {
         extractedData: {
           bankAccounts: [],
           upiIds: [],
+          phishingLinks: [],
           phoneNumbers: [],
-          emails: [],
-          urls: [],
-          cryptoWallets: [],
-          names: [],
-          organizations: [],
+          suspiciousKeywords: [],
         },
         indicators: [],
         summary: 'Unable to analyze conversation.',
+        agentNotes: '',
       };
     }
+    
+    // Ensure extractedData has correct structure
+    if (!analysis.extractedData) {
+      analysis.extractedData = {
+        bankAccounts: [],
+        upiIds: [],
+        phishingLinks: [],
+        phoneNumbers: [],
+        suspiciousKeywords: [],
+      };
+    }
+    
+    console.log(`[${sessionId}] Analysis complete: isScam=${analysis.isScam}, threatLevel=${analysis.threatLevel}`);
 
     return new Response(JSON.stringify(analysis), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

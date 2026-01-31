@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useHoneypotChat } from '@/hooks/useHoneypotChat';
 import { Header } from '@/components/Header';
 import { ChatMessage } from '@/components/ChatMessage';
@@ -6,17 +6,41 @@ import { ChatInput } from '@/components/ChatInput';
 import { IntelligencePanel } from '@/components/IntelligencePanel';
 import { TypingIndicator } from '@/components/TypingIndicator';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { MessageSquare } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { MessageSquare, Send, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 
 const Index = () => {
-  const { messages, isLoading, intelligence, isAnalyzing, sendMessage, clearChat } = useHoneypotChat();
+  const { 
+    messages, 
+    isLoading, 
+    intelligence, 
+    isAnalyzing, 
+    isSubmitting,
+    sendMessage, 
+    clearChat,
+    submitFinalResult,
+    getSessionId,
+  } = useHoneypotChat();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [submitStatus, setSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  const handleSubmitToGuvi = async () => {
+    const result = await submitFinalResult();
+    if (result?.success) {
+      setSubmitStatus('success');
+      toast.success('Results submitted to GUVI successfully!');
+    } else {
+      setSubmitStatus('error');
+      toast.error(result?.message || 'Failed to submit results');
+    }
+  };
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -26,6 +50,46 @@ const Index = () => {
       </div>
 
       <Header onClear={clearChat} messageCount={messages.length} />
+
+      {/* Session ID Display */}
+      <div className="px-6 py-2 bg-card/30 border-b border-border">
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            <span className="font-medium">Session ID:</span>{' '}
+            <code className="text-primary">{getSessionId()}</code>
+          </div>
+          {intelligence?.isScam && (
+            <Button 
+              size="sm" 
+              onClick={handleSubmitToGuvi}
+              disabled={isSubmitting || submitStatus === 'success'}
+              className="gap-2"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Submitting...
+                </>
+              ) : submitStatus === 'success' ? (
+                <>
+                  <CheckCircle className="h-4 w-4" />
+                  Submitted
+                </>
+              ) : submitStatus === 'error' ? (
+                <>
+                  <XCircle className="h-4 w-4" />
+                  Retry Submit
+                </>
+              ) : (
+                <>
+                  <Send className="h-4 w-4" />
+                  Submit to GUVI
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
 
       <div className="flex-1 flex overflow-hidden">
         {/* Chat Section */}
@@ -49,7 +113,7 @@ const Index = () => {
                     <ul className="text-xs text-muted-foreground space-y-1 text-left">
                       <li>• "Congratulations! You've won $1,000,000 in the lottery!"</li>
                       <li>• "Your account has been compromised. Send OTP immediately."</li>
-                      <li>• "I'm a Nigerian prince and need your help..."</li>
+                      <li>• "Your bank KYC is expired. Share your UPI ID now."</li>
                       <li>• "Urgent: Pay ₹5000 to UPI xyz@paytm to avoid account block"</li>
                     </ul>
                   </div>

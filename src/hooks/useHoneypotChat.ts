@@ -1,17 +1,29 @@
-import { useState, useCallback } from 'react';
-import { Message, IntelligenceReport } from '@/types/honeypot';
+import { useState, useCallback, useRef } from 'react';
+import { Message, IntelligenceReport, ConversationMessage, GuviFinalResult, ExtractedIntelligence } from '@/types/honeypot';
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/honeypot-chat`;
 const ANALYSIS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-intelligence`;
+const SUBMIT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/submit-final-result`;
 
 export function useHoneypotChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [intelligence, setIntelligence] = useState<IntelligenceReport | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const sessionIdRef = useRef<string>(crypto.randomUUID());
 
-  const analyzeConversation = useCallback(async (conversation: Message[]) => {
-    if (conversation.length < 2) return;
+  // Convert internal messages to API conversation format
+  const toConversationHistory = useCallback((msgs: Message[]): ConversationMessage[] => {
+    return msgs.map(m => ({
+      sender: m.role === 'user' ? 'scammer' : 'user',
+      text: m.content,
+      timestamp: m.timestamp.toISOString(),
+    }));
+  }, []);
+
+  const analyzeConversation = useCallback(async (conversationHistory: ConversationMessage[]) => {
+    if (conversationHistory.length < 2) return;
     
     setIsAnalyzing(true);
     try {
@@ -22,7 +34,8 @@ export function useHoneypotChat() {
           'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
         body: JSON.stringify({
-          conversation: conversation.map(m => ({ role: m.role, content: m.content })),
+          sessionId: sessionIdRef.current,
+          conversationHistory,
         }),
       });
 
@@ -48,83 +61,61 @@ export function useHoneypotChat() {
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
-    let assistantContent = '';
-    
-    const updateAssistant = (chunk: string) => {
-      assistantContent += chunk;
-      setMessages(prev => {
-        const last = prev[prev.length - 1];
-        if (last?.role === 'assistant') {
-          return prev.map((m, i) => 
-            i === prev.length - 1 ? { ...m, content: assistantContent } : m
-          );
-        }
-        return [...prev, {
-          id: crypto.randomUUID(),
-          role: 'assistant' as const,
-          content: assistantContent,
-          timestamp: new Date(),
-        }];
-      });
-    };
-
     try {
+      // Build conversation history from existing messages
+      const conversationHistory = toConversationHistory(messages);
+      
+      // Create API request in GUVI format
+      const apiRequest = {
+        sessionId: sessionIdRef.current,
+        message: {
+          sender: 'scammer' as const,
+          text: content,
+          timestamp: new Date().toISOString(),
+        },
+        conversationHistory,
+        metadata: {
+          channel: 'Web' as const,
+          language: 'English',
+          locale: 'IN',
+        },
+      };
+
       const response = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
-        body: JSON.stringify({
-          messages: [...messages, userMessage].map(m => ({
-            role: m.role,
-            content: m.content,
-          })),
-        }),
+        body: JSON.stringify(apiRequest),
       });
 
-      if (!response.ok || !response.body) {
+      if (!response.ok) {
         throw new Error('Failed to get response');
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
+      const result = await response.json();
+      
+      if (result.status === 'success' && result.reply) {
+        const assistantMessage: Message = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: result.reply,
+          timestamp: new Date(),
+        };
         
-        let newlineIndex: number;
-        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-          let line = buffer.slice(0, newlineIndex);
-          buffer = buffer.slice(newlineIndex + 1);
-
-          if (line.endsWith('\r')) line = line.slice(0, -1);
-          if (line.startsWith(':') || line.trim() === '') continue;
-          if (!line.startsWith('data: ')) continue;
-
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === '[DONE]') break;
-
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) updateAssistant(content);
-          } catch {
-            buffer = line + '\n' + buffer;
-            break;
-          }
-        }
+        setMessages(prev => [...prev, assistantMessage]);
+        
+        // Analyze after response complete
+        const updatedHistory = [
+          ...conversationHistory,
+          { sender: 'scammer' as const, text: content, timestamp: new Date().toISOString() },
+          { sender: 'user' as const, text: result.reply, timestamp: new Date().toISOString() },
+        ];
+        analyzeConversation(updatedHistory);
+      } else {
+        throw new Error(result.reply || 'Unknown error');
       }
-
-      // Analyze after response complete
-      setMessages(current => {
-        analyzeConversation(current);
-        return current;
-      });
     } catch (error) {
       console.error('Chat error:', error);
       setMessages(prev => [...prev, {
@@ -136,19 +127,63 @@ export function useHoneypotChat() {
     } finally {
       setIsLoading(false);
     }
-  }, [messages, analyzeConversation]);
+  }, [messages, toConversationHistory, analyzeConversation]);
+
+  const submitFinalResult = useCallback(async () => {
+    if (!intelligence) return;
+    
+    setIsSubmitting(true);
+    try {
+      const payload: GuviFinalResult = {
+        sessionId: sessionIdRef.current,
+        scamDetected: intelligence.isScam,
+        totalMessagesExchanged: messages.length,
+        extractedIntelligence: intelligence.extractedData as ExtractedIntelligence,
+        agentNotes: intelligence.summary || 'No additional notes',
+      };
+
+      const response = await fetch(SUBMIT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      
+      if (result.status === 'success') {
+        console.log('Final result submitted to GUVI:', result);
+        return { success: true, message: 'Results submitted successfully!' };
+      } else {
+        throw new Error(result.message || 'Submission failed');
+      }
+    } catch (error) {
+      console.error('Submit error:', error);
+      return { success: false, message: error instanceof Error ? error.message : 'Submission failed' };
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [intelligence, messages]);
 
   const clearChat = useCallback(() => {
     setMessages([]);
     setIntelligence(null);
+    sessionIdRef.current = crypto.randomUUID(); // New session
   }, []);
+
+  const getSessionId = useCallback(() => sessionIdRef.current, []);
 
   return {
     messages,
     isLoading,
     intelligence,
     isAnalyzing,
+    isSubmitting,
     sendMessage,
     clearChat,
+    submitFinalResult,
+    getSessionId,
   };
 }
